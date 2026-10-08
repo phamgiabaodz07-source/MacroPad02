@@ -34,7 +34,7 @@ class LibraryActivity : Activity() {
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
-        games = pref.getStringSet("list", emptySet()).toMutableList()
+        games = (pref.getStringSet("list", emptySet()) ?: emptySet<String>()).toMutableList()
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -69,7 +69,7 @@ class LibraryActivity : Activity() {
     override fun onResume() { super.onResume(); renderCards() }
 
     private fun renderCards() {
-        games = pref.getStringSet("list", emptySet()).toMutableList()
+        games = (pref.getStringSet("list", emptySet()) ?: emptySet<String>()).toMutableList()
         cardBox.removeAllViews()
         if (games.isEmpty()) {
             cardName.text = "Chưa có game"
@@ -102,7 +102,8 @@ class LibraryActivity : Activity() {
         val tv = txt(name, 11f, cDim, false)
         tv.maxLines = 2
         tv.ellipsize = android.text.TextUtils.TruncateAt.END
-        c.addView(tv, LinearLayout.LayoutParams(-1, -2).apply { setPadding(dp(4), 0, dp(4), 0) })
+        tv.setPadding(dp(4), 0, dp(4), 0)
+        c.addView(tv, LinearLayout.LayoutParams(-1, -2))
         return c
     }
 

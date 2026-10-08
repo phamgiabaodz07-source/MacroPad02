@@ -25,7 +25,6 @@ class AddGameActivity : Activity() {
     private val pm by lazy { packageManager }
     private val pref by lazy { getSharedPreferences("games", 0) }
 
-    private val grid by lazy { findViewById<GridLayout>(android.R.id.list) }
     private val apps = mutableListOf<Pair<String, String>>() // (pkg, name)
     private val checked = mutableMapOf<String, Boolean>()
     private lateinit var grid: GridLayout
@@ -45,12 +44,11 @@ class AddGameActivity : Activity() {
         val sv = ScrollView(this)
         grid = GridLayout(this)
         grid.columnCount = 3
-        grid.rowCount = -1
         sv.addView(grid)
         root.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
 
         loadApps()
-        val saved = pref.getStringSet("list", emptySet())
+        val saved: Set<String> = pref.getStringSet("list", emptySet()) ?: emptySet()
         apps.forEach { (pkg, _) -> checked[pkg] = pkg in saved }
         apps.forEach { (pkg, name) ->
             val item = itemView(pkg, name, checked[pkg] ?: false) {
@@ -59,7 +57,8 @@ class AddGameActivity : Activity() {
             }
             grid.addView(item, GridLayout.LayoutParams().apply {
                 width = dp(100); height = dp(130); columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                rowSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); margin = dp(8)
+                rowSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                setMargins(dp(8), dp(8), dp(8), dp(8))
             })
         }
 
@@ -74,7 +73,7 @@ class AddGameActivity : Activity() {
 
     private fun loadApps() {
         pm.getInstalledApplications(PackageManager.GET_META_DATA).forEach { app ->
-            if (app.packageName != packageName && app.flags and ApplicationInfo.FLAG_SYSTEM == 0) {
+            if (app.packageName != packageName && (app.flags and ApplicationInfo.FLAG_SYSTEM) == 0) {
                 val name = (pm.getApplicationLabel(app) ?: app.packageName).toString()
                 apps.add(app.packageName to name)
             }
@@ -102,6 +101,7 @@ class AddGameActivity : Activity() {
         tv.maxLines = 2; tv.ellipsize = TextUtils.TruncateAt.END
         item.addView(tv, LinearLayout.LayoutParams(dp(80), -2).apply { topMargin = dp(4) })
 
+        item.setOnClickListener { cb.toggle() }
         return item
     }
 
