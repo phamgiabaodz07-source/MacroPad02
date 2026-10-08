@@ -71,6 +71,7 @@ class MainActivity : Activity() {
         Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
     } catch (e: Exception) { false }
     private fun manual() = getSharedPreferences("s", 0).getBoolean("manual", false)
+    private fun pairingDone() = getSharedPreferences("s", 0).getBoolean("paired", false)
 
     // ---------- vẽ màn hình ----------
     private fun render() {
@@ -108,9 +109,23 @@ class MainActivity : Activity() {
             else safeStart(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS), Intent(Settings.ACTION_SETTINGS))
         }
 
-        val all = o && n && b && done3
+        val paired = pairingDone()
+        card("4. Ghép đôi thiết bị",
+            if (paired) "Đã ghép đôi thành công." else "Bấm nút bên dưới để bắt đầu ghép đôi bằng mã 6 số.",
+            paired,
+            emptyList(),
+            if (paired) null else "Bắt đầu ghép đôi",
+            null) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+            // TODO: Phần ghép đôi thực sẽ làm ở bước sau
+            getSharedPreferences("s", 0).edit().putBoolean("paired", true).apply()
+            render()
+        }
+
+        val all = o && n && b && done3 && paired
         next.isEnabled = all
         styleButton(next, all)
+        if (all) next.setOnClickListener { startActivity(Intent(this, LibraryActivity::class.java)); finish() }
     }
 
     private fun card(
