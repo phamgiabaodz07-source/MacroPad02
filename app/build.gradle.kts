@@ -22,7 +22,7 @@ android {
         targetSdk = 34
         // Số phiên bản tự tăng theo thời gian build, luôn lớn hơn bản trước
         versionCode = (System.currentTimeMillis() / 60000L).toInt()
-        versionName = "2.0-step2"
+        versionName = "2.0-step3"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
