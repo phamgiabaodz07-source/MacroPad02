@@ -3,23 +3,13 @@ package com.macropad.next
 import android.content.Context
 import android.os.Build
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
-import sun.security.x509.AlgorithmId
-import sun.security.x509.CertificateAlgorithmId
-import sun.security.x509.CertificateExtensions
-import sun.security.x509.CertificateIssuerName
-import sun.security.x509.CertificateSerialNumber
-import sun.security.x509.CertificateSubjectName
-import sun.security.x509.CertificateValidity
-import sun.security.x509.CertificateVersion
-import sun.security.x509.CertificateX509Key
-import sun.security.x509.KeyIdentifier
-import sun.security.x509.PrivateKeyUsageExtension
-import sun.security.x509.SubjectKeyIdentifierExtension
-import sun.security.x509.X500Name
-import sun.security.x509.X509CertImpl
-import sun.security.x509.X509CertInfo
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -28,7 +18,6 @@ import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
-import java.util.Random
 
 /** Khoá ADB lưu lại trong bộ nhớ app để ghép đôi một lần dùng mãi */
 private class KeyedManager(dir: File) : AbsAdbConnectionManager() {
@@ -52,26 +41,14 @@ private class KeyedManager(dir: File) : AbsAdbConnectionManager() {
             val gen = KeyPairGenerator.getInstance("RSA")
             gen.initialize(2048, SecureRandom())
             val kp = gen.generateKeyPair()
-            val pub = kp.public
             val priv = kp.private
-            val algo = "SHA512withRSA"
-            val notBefore = Date()
-            val notAfter = Date(System.currentTimeMillis() + 3650L * 86400000L)
-            val ext = CertificateExtensions()
-            ext.set("SubjectKeyIdentifier", SubjectKeyIdentifierExtension(KeyIdentifier(pub).identifier))
             val name = X500Name("CN=MacroPad2")
-            ext.set("PrivateKeyUsage", PrivateKeyUsageExtension(notBefore, notAfter))
-            val info = X509CertInfo()
-            info.set("version", CertificateVersion(2))
-            info.set("serialNumber", CertificateSerialNumber(Random().nextInt() and Int.MAX_VALUE))
-            info.set("algorithmID", CertificateAlgorithmId(AlgorithmId.get(algo)))
-            info.set("subject", CertificateSubjectName(name))
-            info.set("key", CertificateX509Key(pub))
-            info.set("validity", CertificateValidity(notBefore, notAfter))
-            info.set("issuer", CertificateIssuerName(name))
-            info.set("extensions", ext)
-            val x = X509CertImpl(info)
-            x.sign(priv, algo)
+            val notBefore = Date(System.currentTimeMillis() - 86400000L)
+            val notAfter = Date(System.currentTimeMillis() + 3650L * 86400000L)
+            val holder = JcaX509v3CertificateBuilder(
+                name, BigInteger.valueOf(System.currentTimeMillis()), notBefore, notAfter, name, kp.public
+            ).build(JcaContentSignerBuilder("SHA256withRSA").build(priv))
+            val x = JcaX509CertificateConverter().getCertificate(holder)
             k = priv
             c = x
             try {
