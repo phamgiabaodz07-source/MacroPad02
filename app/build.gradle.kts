@@ -22,11 +22,20 @@ android {
         targetSdk = 34
         // Số phiên bản tự tăng theo thời gian build, luôn lớn hơn bản trước
         versionCode = (System.currentTimeMillis() / 60000L).toInt()
-        versionName = "2.0-step1"
+        versionName = "2.0-step2"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    packaging {
+        resources.excludes += listOf("META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/DEPENDENCIES", "META-INF/AL2.0", "META-INF/LGPL2.1")
+    }
+}
+
+dependencies {
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.0")
+    implementation("com.github.MuntashirAkon:sun-security-android:1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.2")
 }
