@@ -1,10 +1,16 @@
 package com.macropad.next
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
+import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -22,6 +28,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -29,6 +36,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -145,6 +156,17 @@ class BubbleService : Service() {
     private lateinit var blp: WindowManager.LayoutParams
     private var win = 0
     private var panel: View? = null
+    private var host: FrameLayout? = null
+    private var titleTv: TextView? = null
+    private var bw = 0
+    private var bh = 0
+    private var attached = false
+    private var dockAnim: ValueAnimator? = null
+    private var curPkg: String? = null
+    private var lastEventTime = 0L
+    private val poll = object : Runnable {
+        override fun run() { checkForeground(); h.postDelayed(this, 800) }
+    }
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -169,6 +191,11 @@ class BubbleService : Service() {
 
         if (!Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
         if (bubble == null) addBubble()
+        curPkg = null
+        lastEventTime = System.currentTimeMillis()
+        setShown(true)
+        h.removeCallbacks(poll)
+        h.postDelayed(poll, 800)
         reconnect()
         return START_NOT_STICKY
     }
@@ -229,6 +256,8 @@ class BubbleService : Service() {
         v.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    dockAnim?.cancel()
+                    v.animate().scaleX(0.85f).scaleY(0.85f).setDuration(80).start()
                     downX = e.rawX; downY = e.rawY
                     startX = blp.x; startY = blp.y
                     moved = false; longFired = false
@@ -248,6 +277,7 @@ class BubbleService : Service() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     h.removeCallbacks(longRun)
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
                     if (moved) snap()
                     else if (!longFired && e.actionMasked == MotionEvent.ACTION_UP) onTap()
                 }
@@ -255,7 +285,6 @@ class BubbleService : Service() {
             true
         }
         bubble = v
-        wm.addView(v, blp)
     }
 
     /** Đặt bong bóng dính nửa vào cạnh đã lưu (cạnh + vị trí dọc theo cạnh) */
@@ -273,7 +302,7 @@ class BubbleService : Service() {
         }
     }
 
-    /** Thả tay: chọn cạnh gần nhất rồi dính vào đó */
+    /** Thả tay: chọn cạnh gần nhất rồi trượt êm vào dính ở đó */
     private fun snap() {
         val (w, hh) = screen()
         val half = win / 2
@@ -286,8 +315,85 @@ class BubbleService : Service() {
         else (cx - half).toFloat() / (w - win).coerceAtLeast(1)
         getSharedPreferences("bubble", 0).edit()
             .putInt("edge", edge).putFloat("frac", frac.coerceIn(0f, 1f)).apply()
+
+        val fromX = blp.x
+        val fromY = blp.y
         placeDocked()
-        bubble?.let { wm.updateViewLayout(it, blp) }
+        val tx = blp.x
+        val ty = blp.y
+        blp.x = fromX
+        blp.y = fromY
+        val an = ValueAnimator.ofFloat(0f, 1f)
+        an.duration = 260
+        an.interpolator = OvershootInterpolator(0.9f)
+        an.addUpdateListener { a ->
+            val t = a.animatedValue as Float
+            blp.x = (fromX + (tx - fromX) * t).toInt()
+            blp.y = (fromY + (ty - fromY) * t).toInt()
+            pushBubble()
+        }
+        an.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                blp.x = tx
+                blp.y = ty
+                pushBubble()
+            }
+        })
+        dockAnim = an
+        an.start()
+    }
+
+    private fun pushBubble() {
+        val v = bubble ?: return
+        if (attached) try { wm.updateViewLayout(v, blp) } catch (_: Exception) { }
+    }
+
+    /** Hiện/ẩn bong bóng có hiệu ứng mờ + phóng nhỏ */
+    private fun setShown(show: Boolean) {
+        val v = bubble ?: return
+        if (show && !attached) {
+            v.animate().cancel()
+            if (!v.isAttachedToWindow) {
+                v.alpha = 0f
+                v.scaleX = 0.6f
+                v.scaleY = 0.6f
+                try { wm.addView(v, blp) } catch (e: Exception) { return }
+            }
+            attached = true
+            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180)
+                .setInterpolator(DecelerateInterpolator()).start()
+        } else if (!show && attached) {
+            attached = false
+            hidePanel()
+            v.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(150)
+                .setInterpolator(AccelerateInterpolator()).withEndAction {
+                    if (!attached) try { wm.removeView(v) } catch (_: Exception) { }
+                }.start()
+        }
+    }
+
+    // ---------- chỉ hiện khi đang ở trong game đã thêm ----------
+    private fun usageOk(): Boolean {
+        val ao = getSystemService(APP_OPS_SERVICE) as AppOpsManager
+        return ao.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName) ==
+            AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun checkForeground() {
+        if (!usageOk()) { setShown(true); return }
+        val usm = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
+        val now = System.currentTimeMillis()
+        val ev = usm.queryEvents(lastEventTime, now)
+        val e = UsageEvents.Event()
+        var latest = curPkg
+        while (ev.hasNextEvent()) {
+            ev.getNextEvent(e)
+            if (e.eventType == UsageEvents.Event.ACTIVITY_RESUMED) latest = e.packageName
+        }
+        lastEventTime = now - 2000
+        curPkg = latest
+        val games = getSharedPreferences("games", 0).getStringSet("list", emptySet()) ?: emptySet()
+        setShown(latest == null || latest in games)
     }
 
     private fun onTap() {
@@ -301,23 +407,37 @@ class BubbleService : Service() {
         super.onConfigurationChanged(newConfig)
         if (bubble == null) return
         placeDocked()
-        bubble?.let { try { wm.updateViewLayout(it, blp) } catch (_: Exception) { } }
+        pushBubble()
         if (panel != null) {
             val pg = panelPage
-            h.post { showPanel(pg) }
+            h.post { showPanel(pg, false) }
         }
     }
 
     // ---------- bảng menu ----------
     private var panelPage = 0
 
-    private fun hidePanel() {
-        panel?.let { try { wm.removeView(it) } catch (_: Exception) { } }
+    private fun hidePanel(animate: Boolean = true) {
+        val p = panel ?: return
         panel = null
+        host = null
+        titleTv = null
+        if (!animate) {
+            try { wm.removeView(p) } catch (_: Exception) { }
+            return
+        }
+        p.animate().alpha(0f).translationX(-dp(40).toFloat()).setDuration(200)
+            .setInterpolator(AccelerateInterpolator(1.4f)).withEndAction {
+                try { wm.removeView(p) } catch (_: Exception) { }
+            }.start()
     }
 
-    private fun showPanel(pg: Int) {
-        hidePanel()
+    private fun titleOf(pg: Int) = if (pg == 0) "Menu" else "Macro"
+
+    private fun pageView(pg: Int): View = if (pg == 0) menuBody(bw, bh) else macroBody(bw, bh)
+
+    private fun showPanel(pg: Int, animate: Boolean = true) {
+        hidePanel(false)
         panelPage = pg
         val (w, hh) = screen()
         val ph = minOf(w, hh) - dp(16)
@@ -333,10 +453,13 @@ class BubbleService : Service() {
         bg.setStroke(dp(1), cLine)
         root.background = bg
 
+        bw = pw - pad * 2
+        bh = ph - pad * 2 - dp(36)
         root.addView(header(pg), LinearLayout.LayoutParams(-1, dp(36)))
-        val bw = pw - pad * 2
-        val bh = ph - pad * 2 - dp(36)
-        root.addView(if (pg == 0) menuBody(bw, bh) else macroBody(bw, bh), LinearLayout.LayoutParams(bw, bh))
+        val hostV = FrameLayout(this)
+        hostV.addView(pageView(pg))
+        root.addView(hostV, LinearLayout.LayoutParams(bw, bh))
+        host = hostV
 
         val lp = WindowManager.LayoutParams(
             pw, ph,
@@ -347,8 +470,51 @@ class BubbleService : Service() {
         lp.gravity = Gravity.TOP or Gravity.START
         lp.x = dp(8)
         lp.y = (hh - ph) / 2
+        if (animate) {
+            root.alpha = 0f
+            root.translationX = -dp(40).toFloat()
+        }
         wm.addView(root, lp)
         panel = root
+        if (animate) {
+            root.animate().alpha(1f).translationX(0f).setDuration(260)
+                .setInterpolator(DecelerateInterpolator(1.8f)).start()
+        }
+    }
+
+    /** Đổi trang: trang mới trượt vào kèm mờ dần, trang cũ lùi nhẹ và mờ đi (quay lại thì ngược lại) */
+    private fun goPage(pg: Int) {
+        val hostV = host ?: return
+        if (pg == panelPage) return
+        val forward = pg > panelPage
+        val old = hostV.getChildAt(hostV.childCount - 1)
+        val nv = pageView(pg)
+        val dist = dp(28).toFloat()
+        hostV.addView(nv)
+        nv.alpha = 0f
+        nv.translationX = if (forward) dist else -dist
+        nv.animate().alpha(1f).translationX(0f).setDuration(240)
+            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+        old.animate().alpha(0f).translationX(if (forward) -dist else dist).setDuration(200)
+            .setInterpolator(AccelerateInterpolator(1.2f)).withEndAction { hostV.removeView(old) }.start()
+        panelPage = pg
+        titleTv?.let { t ->
+            t.animate().alpha(0f).setDuration(90).withEndAction {
+                t.text = titleOf(pg)
+                t.animate().alpha(1f).setDuration(120).start()
+            }.start()
+        }
+    }
+
+    private fun pressFx(v: View) {
+        v.setOnTouchListener { view, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> view.animate().scaleX(0.94f).scaleY(0.94f).setDuration(70).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    view.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }
+            false
+        }
     }
 
     private fun header(pg: Int): LinearLayout {
@@ -357,11 +523,12 @@ class BubbleService : Service() {
         row.gravity = Gravity.CENTER_VERTICAL
 
         val back = Ico(this, I_BACK, cText)
-        back.setOnClickListener { if (pg == 1) showPanel(0) else hidePanel() }
+        back.setOnClickListener { if (panelPage == 1) goPage(0) else hidePanel() }
         row.addView(back, LinearLayout.LayoutParams(dp(30), dp(30)))
 
         val t = TextView(this)
-        t.text = if (pg == 0) "Menu" else "Macro"
+        t.text = titleOf(pg)
+        titleTv = t
         t.setTextColor(cText)
         t.textSize = 14f
         t.setTypeface(null, Typeface.BOLD)
@@ -387,7 +554,7 @@ class BubbleService : Service() {
                 val cell = LinearLayout(this)
                 cell.gravity = Gravity.CENTER
                 val first = r == 0 && c == 0
-                cell.addView(circle(if (first) "Macro" else null, d) { showPanel(1) }, LinearLayout.LayoutParams(d, d))
+                cell.addView(circle(if (first) "Macro" else null, d) { goPage(1) }, LinearLayout.LayoutParams(d, d))
                 row.addView(cell, LinearLayout.LayoutParams(w / 2, rowH))
             }
             col.addView(row, LinearLayout.LayoutParams(w, rowH))
@@ -408,6 +575,7 @@ class BubbleService : Service() {
         if (text != null) {
             tv.text = text
             tv.setOnClickListener { click() }
+            pressFx(tv)
         }
         return tv
     }
@@ -460,11 +628,14 @@ class BubbleService : Service() {
         c.setOnClickListener {
             Toast.makeText(applicationContext, "$label: sẽ làm ở bước sau", Toast.LENGTH_SHORT).show()
         }
+        pressFx(c)
         return c
     }
 
     override fun onDestroy() {
-        hidePanel()
+        h.removeCallbacks(poll)
+        dockAnim?.cancel()
+        hidePanel(false)
         bubble?.let { try { wm.removeView(it) } catch (_: Exception) { } }
         bubble = null
         worker.shutdownNow()

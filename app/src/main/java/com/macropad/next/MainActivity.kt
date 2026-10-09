@@ -3,6 +3,7 @@ package com.macropad.next
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.Intent
 import android.graphics.Typeface
@@ -11,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.Process
 import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
@@ -71,6 +73,8 @@ class MainActivity : Activity() {
         Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
     } catch (e: Exception) { false }
     private fun manual() = getSharedPreferences("s", 0).getBoolean("manual", false)
+    private fun usageOk() = (getSystemService(APP_OPS_SERVICE) as AppOpsManager).unsafeCheckOpNoThrow(
+        AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName) == AppOpsManager.MODE_ALLOWED
     private fun pairingDone() = getSharedPreferences("s", 0).getBoolean("paired", false)
 
     // ---------- vẽ màn hình ----------
@@ -119,7 +123,15 @@ class MainActivity : Activity() {
             startActivity(Intent(this, PairActivity::class.java))
         }
 
-        val all = o && n && b && done3 && paired
+        val u = usageOk()
+        card("5. Truy cập dữ liệu sử dụng",
+            "Để bong bóng chỉ hiện khi bạn đang ở trong game đã thêm, thoát game thì tự ẩn.",
+            u, emptyList(), if (u) null else "Cấp quyền", null) {
+            safeStart(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$packageName")),
+                Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+
+        val all = o && n && b && done3 && paired && u
         next.isEnabled = all
         styleButton(next, all)
         if (all) next.setOnClickListener { startActivity(Intent(this, LibraryActivity::class.java)); finish() }
