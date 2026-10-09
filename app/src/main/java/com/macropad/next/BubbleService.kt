@@ -28,7 +28,17 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.hardware.display.DisplayManager
 import android.os.Process
+import android.text.TextUtils
+import android.view.Display
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.ScrollView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -416,12 +426,18 @@ class BubbleService : Service() {
 
     // ---------- bảng menu ----------
     private var panelPage = 0
+    private var panelLp: WindowManager.LayoutParams? = null
+    private val cChip = 0xFF243241.toInt()
+    private val cWarn = 0xFFE0796B.toInt()
+
+    private fun toast(s: String) { Toast.makeText(applicationContext, s, Toast.LENGTH_SHORT).show() }
 
     private fun hidePanel(animate: Boolean = true) {
         val p = panel ?: return
         panel = null
         host = null
         titleTv = null
+        panelLp = null
         if (!animate) {
             try { wm.removeView(p) } catch (_: Exception) { }
             return
@@ -432,16 +448,29 @@ class BubbleService : Service() {
             }.start()
     }
 
-    private fun titleOf(pg: Int) = if (pg == 0) "Menu" else "Macro"
+    private fun titleOf(pg: Int) = when (pg) {
+        0 -> "Menu"
+        1 -> "Macro"
+        else -> "Macro đã ghi"
+    }
 
-    private fun pageView(pg: Int): View = if (pg == 0) menuBody(bw, bh) else macroBody(bw, bh)
+    private fun panelWidth(pg: Int): Int {
+        val (w, _) = screen()
+        return if (pg == 2) minOf(dp(460), w - dp(16)) else minOf(dp(208), w)
+    }
+
+    private fun pageView(pg: Int): View = when (pg) {
+        0 -> menuBody(bw, bh)
+        1 -> macroBody(bw, bh)
+        else -> listBody(bw, bh)
+    }
 
     private fun showPanel(pg: Int, animate: Boolean = true) {
         hidePanel(false)
         panelPage = pg
         val (w, hh) = screen()
         val ph = minOf(w, hh) - dp(16)
-        val pw = dp(208).coerceAtMost(w)
+        val pw = panelWidth(pg)
         val pad = dp(10)
 
         val root = LinearLayout(this)
@@ -458,7 +487,7 @@ class BubbleService : Service() {
         root.addView(header(pg), LinearLayout.LayoutParams(-1, dp(36)))
         val hostV = FrameLayout(this)
         hostV.addView(pageView(pg))
-        root.addView(hostV, LinearLayout.LayoutParams(bw, bh))
+        root.addView(hostV, LinearLayout.LayoutParams(-1, bh))
         host = hostV
 
         val lp = WindowManager.LayoutParams(
@@ -470,6 +499,7 @@ class BubbleService : Service() {
         lp.gravity = Gravity.TOP or Gravity.START
         lp.x = dp(8)
         lp.y = (hh - ph) / 2
+        panelLp = lp
         if (animate) {
             root.alpha = 0f
             root.translationX = -dp(40).toFloat()
@@ -482,11 +512,25 @@ class BubbleService : Service() {
         }
     }
 
-    /** Đổi trang: trang mới trượt vào kèm mờ dần, trang cũ lùi nhẹ và mờ đi (quay lại thì ngược lại) */
+    /** Đổi trang: trang mới trượt vào kèm mờ dần, trang cũ lùi nhẹ và mờ đi; bảng giãn/co chiều rộng êm */
     private fun goPage(pg: Int) {
         val hostV = host ?: return
         if (pg == panelPage) return
         val forward = pg > panelPage
+        val pw = panelWidth(pg)
+        bw = pw - dp(20)
+        val lp = panelLp
+        val rootV = panel
+        if (lp != null && rootV != null && lp.width != pw) {
+            val an = ValueAnimator.ofInt(lp.width, pw)
+            an.duration = 260
+            an.interpolator = DecelerateInterpolator(1.6f)
+            an.addUpdateListener { a ->
+                lp.width = a.animatedValue as Int
+                try { wm.updateViewLayout(rootV, lp) } catch (_: Exception) { }
+            }
+            an.start()
+        }
         val old = hostV.getChildAt(hostV.childCount - 1)
         val nv = pageView(pg)
         val dist = dp(28).toFloat()
@@ -523,7 +567,13 @@ class BubbleService : Service() {
         row.gravity = Gravity.CENTER_VERTICAL
 
         val back = Ico(this, I_BACK, cText)
-        back.setOnClickListener { if (panelPage == 1) goPage(0) else hidePanel() }
+        back.setOnClickListener {
+            when (panelPage) {
+                0 -> hidePanel()
+                1 -> goPage(0)
+                else -> goPage(1)
+            }
+        }
         row.addView(back, LinearLayout.LayoutParams(dp(30), dp(30)))
 
         val t = TextView(this)
@@ -542,10 +592,10 @@ class BubbleService : Service() {
     }
 
     /** Bảng 1: lưới 2 cột x 4 hàng nút tròn, nút đầu là "Macro", các ô còn lại để trống mờ */
-    private fun menuBody(w: Int, h: Int): LinearLayout {
+    private fun menuBody(w: Int, hgt: Int): LinearLayout {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
-        val rowH = h / 4
+        val rowH = hgt / 4
         val d = (minOf(w / 2, rowH) - dp(10)).coerceAtMost(dp(60))
         for (r in 0 until 4) {
             val row = LinearLayout(this)
@@ -581,19 +631,19 @@ class BubbleService : Service() {
     }
 
     /** Bảng 2: Ghi Macro, Tạo Macro, Macro đã ghi, Macro đã tạo, và nút dài Kích hoạt */
-    private fun macroBody(w: Int, h: Int): LinearLayout {
+    private fun macroBody(w: Int, hgt: Int): LinearLayout {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
-        val rowH = h / 3
+        val rowH = hgt / 3
         val half = w / 2
 
         val r1 = LinearLayout(this)
-        r1.addView(card(I_REC, "Ghi Macro", cIcon), cardLp(half, rowH))
+        r1.addView(card(I_REC, "Ghi Macro", cIcon) { startRecording() }, cardLp(half, rowH))
         r1.addView(card(I_PLUS, "Tạo Macro", cIcon), cardLp(half, rowH))
         col.addView(r1, LinearLayout.LayoutParams(w, rowH))
 
         val r2 = LinearLayout(this)
-        r2.addView(card(I_FOLDER, "Macro đã ghi", cIcon), cardLp(half, rowH))
+        r2.addView(card(I_FOLDER, "Macro đã ghi", cIcon) { goPage(2) }, cardLp(half, rowH))
         r2.addView(card(I_DOC, "Macro đã tạo", cIcon), cardLp(half, rowH))
         col.addView(r2, LinearLayout.LayoutParams(w, rowH))
 
@@ -603,11 +653,11 @@ class BubbleService : Service() {
         return col
     }
 
-    private fun cardLp(w: Int, h: Int) = LinearLayout.LayoutParams(w - dp(8), h - dp(8)).apply {
+    private fun cardLp(w: Int, hgt: Int) = LinearLayout.LayoutParams(w - dp(8), hgt - dp(8)).apply {
         setMargins(dp(4), dp(4), dp(4), dp(4))
     }
 
-    private fun card(kind: Int, label: String, tint: Int): LinearLayout {
+    private fun card(kind: Int, label: String, tint: Int, onClick: (() -> Unit)? = null): LinearLayout {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.gravity = Gravity.CENTER
@@ -626,15 +676,405 @@ class BubbleService : Service() {
         t.setPadding(0, dp(4), 0, 0)
         c.addView(t, LinearLayout.LayoutParams(-2, -2))
         c.setOnClickListener {
-            Toast.makeText(applicationContext, "$label: sẽ làm ở bước sau", Toast.LENGTH_SHORT).show()
+            if (onClick != null) onClick() else toast("$label: sẽ làm ở bước sau")
         }
         pressFx(c)
         return c
     }
 
+    // ---------- danh sách macro đã ghi ----------
+    private fun gamePkg(): String? {
+        val sp = getSharedPreferences("games", 0)
+        val games = sp.getStringSet("list", emptySet()) ?: emptySet()
+        val c = curPkg
+        return if (c != null && c in games) c else sp.getString("last", null)
+    }
+
+    private fun appLabel(pkg: String): String = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: Exception) { pkg }
+
+    private fun listBody(w: Int, hgt: Int): View {
+        val pkg = gamePkg()
+        val macros = if (pkg == null) emptyList() else MacroStore.list(this, pkg)
+        if (macros.isEmpty()) {
+            val tv = TextView(this)
+            tv.text = "Chưa có macro nào.\nBấm Ghi Macro để tạo."
+            tv.setTextColor(cDim)
+            tv.textSize = 13f
+            tv.gravity = Gravity.CENTER
+            return tv
+        }
+        val sv = ScrollView(this)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        macros.forEach { m ->
+            col.addView(macroRow(m), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        sv.addView(col)
+        return sv
+    }
+
+    private fun chip(text: String): TextView {
+        val tv = TextView(this)
+        tv.text = text
+        tv.textSize = 11f
+        tv.setTextColor(cText)
+        tv.gravity = Gravity.CENTER
+        tv.setPadding(dp(10), dp(6), dp(10), dp(6))
+        val g = GradientDrawable()
+        g.cornerRadius = dp(10).toFloat()
+        g.setColor(cChip)
+        tv.background = g
+        pressFx(tv)
+        return tv
+    }
+
+    private fun macroRow(m: Macro): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(12), dp(10), dp(12), dp(10))
+        val g = GradientDrawable()
+        g.cornerRadius = dp(14).toFloat()
+        g.setColor(cCard)
+        g.setStroke(dp(1), cLine)
+        box.background = g
+
+        val name = TextView(this)
+        name.text = m.name
+        name.setTextColor(cText)
+        name.textSize = 13f
+        name.setTypeface(null, Typeface.BOLD)
+        name.maxLines = 1
+        name.ellipsize = TextUtils.TruncateAt.END
+        box.addView(name)
+
+        val fingers = m.steps.map { it.finger }.distinct().size
+        val meta = TextView(this)
+        meta.text = "$fingers ngón · ${m.steps.size} bước · " + String.format(Locale.US, "%.1f s", m.totalMs / 1000.0)
+        meta.setTextColor(cDim)
+        meta.textSize = 11f
+        box.addView(meta)
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.END
+        val lpChip = { LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6); topMargin = dp(8) } }
+
+        val edit = chip("Chỉnh sửa")
+        edit.setOnClickListener { toast("Trình chỉnh dòng thời gian sẽ làm ở bước sau") }
+        row.addView(edit, lpChip())
+
+        val del = chip("Xóa")
+        del.setOnClickListener {
+            if (del.tag == "ok") {
+                MacroStore.delete(this, m.pkg, m.id)
+                refreshList()
+            } else {
+                del.tag = "ok"
+                del.text = "Chắc chắn?"
+                del.setTextColor(cWarn)
+                h.postDelayed({
+                    del.tag = null
+                    del.text = "Xóa"
+                    del.setTextColor(cText)
+                }, 3000)
+            }
+        }
+        row.addView(del, lpChip())
+
+        val ren = chip("Đổi tên")
+        ren.setOnClickListener {
+            askName("Đổi tên macro", m.name, "Lưu") { n ->
+                if (n.isNotBlank()) MacroStore.rename(this, m.pkg, m.id, n)
+                refreshList()
+            }
+        }
+        row.addView(ren, lpChip())
+        box.addView(row)
+        return box
+    }
+
+    private fun refreshList() {
+        val hostV = host ?: return
+        if (panelPage != 2) return
+        hostV.removeAllViews()
+        hostV.addView(listBody(bw, bh))
+    }
+
+    // ---------- hộp nhập tên (dùng khi lưu và đổi tên) ----------
+    private var prompt: View? = null
+
+    private fun closePrompt() {
+        val p = prompt ?: return
+        prompt = null
+        try {
+            (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(p.windowToken, 0)
+        } catch (_: Exception) { }
+        try { wm.removeView(p) } catch (_: Exception) { }
+    }
+
+    private fun askName(title: String, initial: String, okText: String, onOk: (String) -> Unit) {
+        closePrompt()
+        val (w, _) = screen()
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(14), dp(12), dp(14), dp(12))
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(16).toFloat()
+        bg.setColor(cBg)
+        bg.setStroke(dp(1), cLine)
+        root.background = bg
+
+        val t = TextView(this)
+        t.text = title
+        t.setTextColor(cText)
+        t.textSize = 14f
+        t.setTypeface(null, Typeface.BOLD)
+        root.addView(t)
+
+        val et = EditText(this)
+        et.setText(initial)
+        et.setSelectAllOnFocus(true)
+        et.setTextColor(cText)
+        et.textSize = 13f
+        et.setSingleLine(true)
+        et.inputType = android.text.InputType.TYPE_CLASS_TEXT
+        et.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
+        et.setPadding(dp(12), dp(8), dp(12), dp(8))
+        val eg = GradientDrawable()
+        eg.cornerRadius = dp(10).toFloat()
+        eg.setColor(cCard)
+        et.background = eg
+        root.addView(et, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.END
+        val cancel = chip("Hủy")
+        cancel.setOnClickListener { closePrompt() }
+        row.addView(cancel, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+        val ok = chip(okText)
+        ok.setTextColor(cAccent)
+        ok.setOnClickListener {
+            val txt = et.text.toString().trim()
+            closePrompt()
+            onOk(txt)
+        }
+        row.addView(ok, LinearLayout.LayoutParams(-2, -2))
+        root.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+
+        val lp = WindowManager.LayoutParams(
+            minOf(dp(340), w - dp(24)), WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        lp.y = dp(24)
+        lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        wm.addView(root, lp)
+        prompt = root
+        et.requestFocus()
+        h.postDelayed({
+            try {
+                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+            } catch (_: Exception) { }
+        }, 200)
+    }
+
+    // ---------- ghi macro ----------
+    private var recBar: View? = null
+    private var recTitle: TextView? = null
+    private var recHint: TextView? = null
+    private var recBtn: TextView? = null
+    private var recAction: () -> Unit = {}
+    private var recorder: TouchRecorder? = null
+    private var recState = 0      // 0 không ghi, 1 chuẩn bị, 2 chờ chạm, 3 đang ghi
+    private var recStartWall = 0L
+    private var recPkg = ""
+
+    private val tick = object : Runnable {
+        override fun run() {
+            if (recState == 3) {
+                val s = (System.currentTimeMillis() - recStartWall) / 1000
+                recTitle?.text = String.format(Locale.US, "Đang ghi  %02d:%02d", s / 60, s % 60)
+                h.postDelayed(this, 500)
+            }
+        }
+    }
+
+    private fun showRecBar(title: String, hint: String, btn: String, action: () -> Unit) {
+        closeRecBar(false)
+        val (w, _) = screen()
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(14), dp(10), dp(14), dp(10))
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(16).toFloat()
+        bg.setColor(cBg)
+        bg.setStroke(dp(1), cLine)
+        root.background = bg
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        val t = TextView(this)
+        t.setTextColor(cText)
+        t.textSize = 13f
+        t.setTypeface(null, Typeface.BOLD)
+        row.addView(t, LinearLayout.LayoutParams(0, -2, 1f))
+        val b = chip(btn)
+        b.setTextColor(cAccent)
+        b.setOnClickListener { recAction() }
+        row.addView(b, LinearLayout.LayoutParams(-2, -2))
+        root.addView(row)
+
+        val hn = TextView(this)
+        hn.setTextColor(cDim)
+        hn.textSize = 11f
+        root.addView(hn)
+
+        recTitle = t
+        recHint = hn
+        recBtn = b
+        recAction = action
+        t.text = title
+        hn.text = hint
+        hn.visibility = if (hint.isEmpty()) View.GONE else View.VISIBLE
+
+        val lp = WindowManager.LayoutParams(
+            minOf(dp(300), w - dp(16)), WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        lp.y = dp(10)
+        root.alpha = 0f
+        root.translationY = -dp(20).toFloat()
+        wm.addView(root, lp)
+        recBar = root
+        root.animate().alpha(1f).translationY(0f).setDuration(220)
+            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+    }
+
+    private fun setRecBar(title: String, hint: String, btn: String, action: () -> Unit) {
+        recTitle?.text = title
+        recHint?.text = hint
+        recHint?.visibility = if (hint.isEmpty()) View.GONE else View.VISIBLE
+        recBtn?.text = btn
+        recAction = action
+    }
+
+    private fun closeRecBar(animate: Boolean = true) {
+        val p = recBar ?: return
+        recBar = null
+        recTitle = null
+        recHint = null
+        recBtn = null
+        if (!animate) {
+            try { wm.removeView(p) } catch (_: Exception) { }
+            return
+        }
+        p.animate().alpha(0f).translationY(-dp(20).toFloat()).setDuration(180)
+            .setInterpolator(AccelerateInterpolator()).withEndAction {
+                try { wm.removeView(p) } catch (_: Exception) { }
+            }.start()
+    }
+
+    private fun excludedRects(): List<IntArray> {
+        val (w, _) = screen()
+        val bw2 = minOf(dp(300), w - dp(16))
+        val bx = (w - bw2) / 2
+        return listOf(
+            intArrayOf(bx, 0, bx + bw2, dp(110)),
+            intArrayOf(blp.x, blp.y, blp.x + win, blp.y + win)
+        )
+    }
+
+    private fun startRecording() {
+        if (recState != 0) return
+        val pkg = gamePkg()
+        if (pkg == null) { toast("Chưa biết game đang mở"); return }
+        recPkg = pkg
+        hidePanel()
+        recState = 1
+        showRecBar("Đang chuẩn bị…", "", "Hủy") { cancelRecording() }
+        worker.execute {
+            if (!Adb.ensureConnected(this)) {
+                h.post { toast("Chưa kết nối ADB. Hãy ghép đôi lại."); cancelRecording() }
+                return@execute
+            }
+            val (w, hh) = screen()
+            val rot = (getSystemService(DISPLAY_SERVICE) as DisplayManager)
+                .getDisplay(Display.DEFAULT_DISPLAY).rotation
+            val rec = TouchRecorder(this, w, hh, rot, { excludedRects() },
+                { h.post { onRecStarted() } },
+                { m -> h.post { toast(m); cancelRecording() } })
+            recorder = rec
+            if (!rec.start()) return@execute
+            h.post {
+                if (recState == 1) {
+                    recState = 2
+                    setRecBar("Đang chờ…", "Việc ghi sẽ tự bắt đầu khi bạn chạm vào màn hình", "Hủy") { cancelRecording() }
+                }
+            }
+        }
+    }
+
+    private fun onRecStarted() {
+        if (recState != 2) return
+        recState = 3
+        recStartWall = System.currentTimeMillis()
+        setRecBar("Đang ghi  00:00", "", "Kết thúc") { finishRecording() }
+        h.postDelayed(tick, 500)
+    }
+
+    private fun cancelRecording() {
+        h.removeCallbacks(tick)
+        recState = 0
+        closeRecBar()
+        val rec = recorder
+        recorder = null
+        if (rec != null) Thread { rec.stop() }.start()
+    }
+
+    private fun finishRecording() {
+        val rec = recorder ?: return
+        recorder = null
+        h.removeCallbacks(tick)
+        recState = 0
+        closeRecBar()
+        val pkg = recPkg
+        worker.execute {
+            val steps = rec.stop()
+            h.post {
+                if (steps.isEmpty()) {
+                    toast("Chưa ghi được thao tác nào")
+                } else {
+                    val def = appLabel(pkg) + " " + SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(Date())
+                    askName("Lưu macro", def, "Lưu") { n ->
+                        val name = if (n.isBlank()) def else n
+                        MacroStore.add(this, Macro(System.currentTimeMillis().toString(), name, pkg,
+                            rec.screenW, rec.screenH, steps, System.currentTimeMillis()))
+                        toast("Đã lưu macro")
+                    }
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         h.removeCallbacks(poll)
+        h.removeCallbacks(tick)
         dockAnim?.cancel()
+        val rec = recorder
+        recorder = null
+        if (rec != null) Thread { rec.stop() }.start()
+        closePrompt()
+        closeRecBar(false)
         hidePanel(false)
         bubble?.let { try { wm.removeView(it) } catch (_: Exception) { } }
         bubble = null

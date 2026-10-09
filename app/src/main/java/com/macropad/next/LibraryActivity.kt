@@ -129,8 +129,9 @@ class LibraryActivity : Activity() {
     private fun playGame() {
         val pkg = games.getOrNull(selectedIdx) ?: return
         val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return
+        pref.edit().putString("last", pkg).apply()
         if (Settings.canDrawOverlays(this)) {
-            try { startForegroundService(Intent(this, BubbleService::class.java)) } catch (e: Exception) { }
+            try { startForegroundService(Intent(this, BubbleService::class.java).putExtra("game", pkg)) } catch (e: Exception) { }
         }
         startActivity(launch)
     }

@@ -103,6 +103,42 @@ object Adb {
         }
     }
 
+    /** Chạy lệnh shell và đọc từng dòng đầu ra cho đến khi luồng đóng. onOpen trả về tay cầm để đóng luồng từ nơi khác. */
+    fun readLines(ctx: Context, cmd: String, onOpen: (java.io.Closeable) -> Unit, onLine: (String) -> Unit) {
+        val st = manager(ctx).openStream("shell:$cmd")
+        onOpen(java.io.Closeable { try { st.close() } catch (_: Exception) { } })
+        try {
+            val r = st.openInputStream().bufferedReader()
+            while (true) {
+                val line = r.readLine() ?: break
+                onLine(line)
+            }
+        } finally {
+            try { st.close() } catch (_: Exception) { }
+        }
+    }
+
+    /** Chạy một lệnh shell kéo dài, đọc từng dòng ở luồng riêng. Gọi close() để dừng. */
+    fun stream(ctx: Context, cmd: String, onLine: (String) -> Unit, onEnd: () -> Unit): java.io.Closeable {
+        val st = manager(ctx).openStream("shell:$cmd")
+        val t = Thread {
+            try {
+                st.openInputStream().bufferedReader().use { r ->
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        onLine(line)
+                    }
+                }
+            } catch (_: Exception) { }
+            onEnd()
+        }
+        t.isDaemon = true
+        t.start()
+        return object : java.io.Closeable {
+            override fun close() { try { st.close() } catch (_: Exception) { } }
+        }
+    }
+
     /** Tìm cổng kết nối rồi kết nối (dùng sau khi đã ghép đôi). Trả về true nếu thành công. */
     fun ensureConnected(ctx: Context): Boolean {
         if (connected) return true
