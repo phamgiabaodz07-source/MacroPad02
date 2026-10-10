@@ -715,6 +715,23 @@ class BubbleService : Service() {
         val sv = ScrollView(this)
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
+        val modeRow = LinearLayout(this)
+        modeRow.gravity = Gravity.CENTER_VERTICAL
+        val modeTv = TextView(this)
+        modeTv.text = "Chế độ phát (thử B nếu game không nhận)"
+        modeTv.setTextColor(cDim)
+        modeTv.textSize = 11f
+        modeRow.addView(modeTv, LinearLayout.LayoutParams(0, -2, 1f))
+        val sp = getSharedPreferences("play", 0)
+        val modeChip = chip(if (sp.getInt("mode", 0) == 1) "B" else "A")
+        modeChip.setOnClickListener {
+            val nm = if (sp.getInt("mode", 0) == 1) 0 else 1
+            sp.edit().putInt("mode", nm).apply()
+            modeChip.text = if (nm == 1) "B" else "A"
+            toast(if (nm == 1) "Chế độ B: dùng mã màn hình cảm ứng thật" else "Chế độ A: mặc định")
+        }
+        modeRow.addView(modeChip)
+        col.addView(modeRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         macros.forEach { m ->
             col.addView(macroRow(m), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }

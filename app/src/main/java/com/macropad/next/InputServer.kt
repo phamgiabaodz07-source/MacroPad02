@@ -23,6 +23,8 @@ object InputServer {
     private val ys = HashMap<Int, Float>()
     private var downTime = 0L
     private var errCount = 0
+    private var devMode = 0       // 0: mã thiết bị 0, 1: mã màn hình cảm ứng thật
+    private var touchId = 0
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -77,7 +79,25 @@ object InputServer {
             "M" -> if (p.size >= 4) move(p[1].toInt(), p[2].toFloat(), p[3].toFloat())
             "U" -> if (p.size >= 2) up(p[1].toInt())
             "R" -> releaseAll()
+            "S" -> if (p.size >= 2) {
+                devMode = p[1].toInt()
+                if (devMode == 1) touchId = realTouchId()
+                println("Chế độ phát $devMode (mã thiết bị: ${if (devMode == 1) touchId else 0})")
+                System.out.flush()
+            }
         }
+    }
+
+    private fun realTouchId(): Int {
+        try {
+            for (id in InputDevice.getDeviceIds()) {
+                val dev = InputDevice.getDevice(id) ?: continue
+                if ((dev.sources and InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN) return id
+            }
+        } catch (e: Throwable) {
+            println("LỖI tìm màn hình cảm ứng: ${e.javaClass.simpleName}")
+        }
+        return 0
     }
 
     private fun down(id: Int, x: Float, y: Float) {
@@ -132,12 +152,13 @@ object InputServer {
         }
         val now = SystemClock.uptimeMillis()
         val ev = MotionEvent.obtain(
-            downTime, now, action, n, props, coords, 0, 0, 1f, 1f, 0, 0,
+            downTime, now, action, n, props, coords, 0, 0, 1f, 1f, if (devMode == 1) touchId else 0, 0,
             InputDevice.SOURCE_TOUCHSCREEN, 0
         )
         try { setDisplay?.invoke(ev, 0) } catch (_: Throwable) { }
         try {
-            if (threeArgs) inject!!.invoke(im, ev, 0, -1) else inject!!.invoke(im, ev, 0)
+            val r = if (threeArgs) inject!!.invoke(im, ev, 0, -1) else inject!!.invoke(im, ev, 0)
+            if (r == false && errCount++ < 5) println("Hệ thống từ chối sự kiện chạm")
         } catch (e: Throwable) {
             if (errCount++ < 5) println("LỖI chạm: ${e.cause ?: e}")
         }

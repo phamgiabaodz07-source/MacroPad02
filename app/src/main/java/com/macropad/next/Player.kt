@@ -73,6 +73,7 @@ object Player {
                 if (!ensureServer(ctx)) {
                     msg = "Không bật được máy chủ chạm (xem nhật ký)"
                 } else {
+                    send("S " + ctx.getSharedPreferences("play", 0).getInt("mode", 0))
                     val evs = build(m, screenW, screenH)
                     val t0 = SystemClock.uptimeMillis()
                     for (e in evs) {
@@ -101,7 +102,7 @@ object Player {
         val fy = sh.toFloat() / m.sh
         val out = ArrayList<Ev>()
         for (s in m.steps) {
-            val id = 10 + s.finger
+            val id = 9 - minOf(s.finger, 9)
             val st = s.startMs
             val end = s.startMs + s.durMs
             when (s.type) {
