@@ -139,6 +139,30 @@ object Adb {
         }
     }
 
+    /** Như stream() nhưng có thể ghi dữ liệu vào đầu vào (stdin) của lệnh */
+    fun proc(ctx: Context, cmd: String, onLine: (String) -> Unit, onEnd: () -> Unit): Proc {
+        val st = manager(ctx).openStream("shell:$cmd")
+        val m = try { st.javaClass.getMethod("openOutputStream") }
+        catch (e: NoSuchMethodException) { st.javaClass.getMethod("getOutputStream") }
+        val out = m.invoke(st) as java.io.OutputStream
+        val t = Thread {
+            try {
+                st.openInputStream().bufferedReader().use { r ->
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        onLine(line)
+                    }
+                }
+            } catch (_: Exception) { }
+            onEnd()
+        }
+        t.isDaemon = true
+        t.start()
+        return Proc(out, object : java.io.Closeable {
+            override fun close() { try { st.close() } catch (_: Exception) { } }
+        })
+    }
+
     /** Tìm cổng kết nối rồi kết nối (dùng sau khi đã ghép đôi). Trả về true nếu thành công. */
     fun ensureConnected(ctx: Context): Boolean {
         if (connected) return true
@@ -162,4 +186,8 @@ object Adb {
             m.stop()
         }
     }
+}
+
+class Proc(val out: java.io.OutputStream, private val closer: java.io.Closeable) : java.io.Closeable {
+    override fun close() { closer.close() }
 }

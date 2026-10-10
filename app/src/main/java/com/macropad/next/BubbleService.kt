@@ -171,6 +171,7 @@ class BubbleService : Service() {
     private var bw = 0
     private var bh = 0
     private var attached = false
+    private var editor: MacroEditor? = null
     private var dockAnim: ValueAnimator? = null
     private var curPkg: String? = null
     private var lastEventTime = 0L
@@ -375,6 +376,7 @@ class BubbleService : Service() {
         } else if (!show && attached) {
             attached = false
             hidePanel()
+            editor?.close()
             v.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(150)
                 .setInterpolator(AccelerateInterpolator()).withEndAction {
                     if (!attached) try { wm.removeView(v) } catch (_: Exception) { }
@@ -407,6 +409,11 @@ class BubbleService : Service() {
     }
 
     private fun onTap() {
+        if (Player.playing) {
+            Player.stop()
+            toast("Đã dừng phát")
+            return
+        }
         if (panel == null) {
             if (!Adb.connected) reconnect()
             showPanel(0)
@@ -761,8 +768,13 @@ class BubbleService : Service() {
         row.gravity = Gravity.END
         val lpChip = { LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6); topMargin = dp(8) } }
 
+        val play = chip("Phát")
+        play.setTextColor(cAccent)
+        play.setOnClickListener { playMacro(m) }
+        row.addView(play, lpChip())
+
         val edit = chip("Chỉnh sửa")
-        edit.setOnClickListener { toast("Trình chỉnh dòng thời gian sẽ làm ở bước sau") }
+        edit.setOnClickListener { openEditor(m) }
         row.addView(edit, lpChip())
 
         val del = chip("Xóa")
@@ -793,6 +805,25 @@ class BubbleService : Service() {
         row.addView(ren, lpChip())
         box.addView(row)
         return box
+    }
+
+    private fun playMacro(m: Macro) {
+        if (Player.playing) { Player.stop(); return }
+        hidePanel()
+        toast("Đang phát. Bấm bong bóng để dừng.")
+        val (w, hh) = screen()
+        h.postDelayed({
+            Player.play(this, m, w, hh) { msg -> h.post { toast(msg) } }
+        }, 300)
+    }
+
+    private fun openEditor(m: Macro) {
+        if (editor != null) return
+        hidePanel(false)
+        val (w, hh) = screen()
+        val ed = MacroEditor(this, wm, m, w, hh, { editor = null }, { toast("Đã lưu macro") })
+        editor = ed
+        ed.show()
     }
 
     private fun refreshList() {
@@ -1070,6 +1101,9 @@ class BubbleService : Service() {
         h.removeCallbacks(poll)
         h.removeCallbacks(tick)
         dockAnim?.cancel()
+        editor?.close()
+        Player.stop()
+        Player.stopServer()
         val rec = recorder
         recorder = null
         if (rec != null) Thread { rec.stop() }.start()

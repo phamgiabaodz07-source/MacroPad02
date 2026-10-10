@@ -14,7 +14,9 @@ class Step(
     val y1: Int,
     val x2: Int,
     val y2: Int,
-    val path: List<IntArray> = emptyList()   // mỗi điểm: [thời gian ms, x, y]
+    val path: List<IntArray> = emptyList(),   // mỗi điểm: [thời gian ms, x, y]
+    val hold: Int = 40,                       // chạm liên tục: thời lượng mỗi lần chạm (ms)
+    val gap: Int = 40                         // chạm liên tục: khoảng cách giữa hai lần chạm (ms)
 )
 
 class Macro(
@@ -23,7 +25,7 @@ class Macro(
     val pkg: String,
     val sw: Int,
     val sh: Int,
-    val steps: List<Step>,
+    var steps: List<Step>,
     val createdAt: Long
 ) {
     val totalMs: Long get() = steps.maxOfOrNull { it.startMs + it.durMs } ?: 0L
@@ -58,6 +60,12 @@ object MacroStore {
         save(ctx, pkg, all)
     }
 
+    fun update(ctx: Context, m: Macro) {
+        val all = list(ctx, m.pkg).filter { it.id != m.id }.toMutableList()
+        all.add(m)
+        save(ctx, m.pkg, all)
+    }
+
     private fun save(ctx: Context, pkg: String, all: List<Macro>) {
         val arr = JSONArray()
         all.forEach { arr.put(toJson(it)) }
@@ -83,6 +91,8 @@ object MacroStore {
             so.put("y1", s.y1)
             so.put("x2", s.x2)
             so.put("y2", s.y2)
+            so.put("h", s.hold)
+            so.put("g", s.gap)
             if (s.path.isNotEmpty()) {
                 val pa = JSONArray()
                 s.path.forEach { pt -> pa.put(JSONArray().put(pt[0]).put(pt[1]).put(pt[2])) }
@@ -109,7 +119,8 @@ object MacroStore {
             }
             steps.add(Step(
                 so.getInt("type"), so.getInt("f"), so.getLong("t"), so.getLong("d"),
-                so.getInt("x1"), so.getInt("y1"), so.getInt("x2"), so.getInt("y2"), path
+                so.getInt("x1"), so.getInt("y1"), so.getInt("x2"), so.getInt("y2"), path,
+                so.optInt("h", 40), so.optInt("g", 40)
             ))
         }
         return Macro(
